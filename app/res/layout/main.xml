@@ -1,55 +1,103 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  主界面布局（v29 · UI 优化）
+
+  布局结构（自上而下）：
+    1. 标题栏        —— App 名 + 一行副标题
+    2. 终端入口按钮   —— 独立 Shell 终端
+    3. 主按钮        —— 一键提权（大号 · 醒目）
+    4. 状态行        —— 灰色就绪 / 黄色执行中 / 绿色成功 / 红色失败
+    5. 日志区        —— 深色底 · 等宽字体 · 可长按选中复制（占满剩余空间）
+    6. 底部提示      —— 纯文字说明「日志可长按选中复制」
+
+  说明：
+    · 已彻底删除「复制日志」「保存到 /sdcard」两个按钮 ——
+      日志区 textIsSelectable=true，长按选中后系统自带复制菜单，
+      比额外按钮更直观，也少占一整行界面。
+-->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="12dp">
-    <Button
-        android:id="@+id/run"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="@string/btn_run"
-        android:textSize="18sp" />
+    android:background="#0D1117"
+    android:padding="14dp">
+
+    <!-- ===== 1. 标题栏 ===== -->
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:paddingTop="8dp"
+        android:text="@string/app_name"
+        android:textColor="#E6EDF3"
+        android:textSize="20sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/subtitle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingTop="2dp"
+        android:paddingBottom="10dp"
+        android:text="Shell 域获取 → 内核提权 · 小米 8550 专用"
+        android:textColor="#6E7681"
+        android:textSize="11sp" />
+
+    <!-- ===== 2. 主按钮：一键提权（大号醒目）===== -->
+    <Button
+        android:id="@+id/run"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:text="@string/btn_run"
+        android:textSize="18sp"
+        android:textStyle="bold" />
+
+    <!-- ===== 3. 状态行 ===== -->
+    <TextView
+        android:id="@+id/status"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:paddingLeft="4dp"
         android:text="@string/status_idle"
         android:textColor="#8B949E"
         android:textSize="12sp" />
+
+    <!-- ===== 4. 日志区（占满剩余空间）===== -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:paddingLeft="4dp"
+        android:text="运行日志"
+        android:textColor="#6E7681"
+        android:textSize="11sp" />
+
     <ScrollView
         android:id="@+id/scroll"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:layout_marginTop="8dp"
-        android:background="#0A0D10">
+        android:layout_marginTop="4dp"
+        android:background="#010409"
+        android:padding="2dp">
         <TextView
             android:id="@+id/output"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:padding="8dp"
+            android:padding="10dp"
+            android:text="@string/log_hint"
             android:textColor="#C9D1D9"
             android:textSize="11sp"
             android:textIsSelectable="true"
             android:typeface="monospace" />
     </ScrollView>
-    <LinearLayout
+
+    <!-- ===== 5. 底部提示（替代原「复制/保存」按钮行）===== -->
+    <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:layout_marginTop="6dp">
-        <Button
-            android:id="@+id/copy"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="@string/btn_copy" />
-        <Button
-            android:id="@+id/save"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="@string/btn_save" />
-    </LinearLayout>
+        android:layout_marginTop="6dp"
+        android:paddingLeft="4dp"
+        android:text="@string/log_tip"
+        android:textColor="#6E7681"
+        android:textSize="10sp" />
 </LinearLayout>
