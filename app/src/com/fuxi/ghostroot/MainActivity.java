@@ -482,17 +482,17 @@ public class MainActivity extends Activity {
         log("[*] [兜底] 尝试 Shizuku 通道 ...");
 
         // 1) 手动绑定 Shizuku binder（替代 ShizukuProvider）
-        boolean boot = ShizukuAdapter.bootstrap(this);
+        boolean boot = ShizukuBridge.bootstrap(this);
         log("[*] shizuku bootstrap = " + boot);
-        if (!boot || !ShizukuAdapter.isBinderAlive()) {
+        if (!boot || !ShizukuBridge.isBinderAlive()) {
             log("[!] [兜底] 未检测到运行中的 Shizuku");
             log("[*]       如需使用兜底通道：安装并启动 Shizuku（ADB 模式）后重试");
             return null;
         }
-        log("[*] shizuku 状态: " + ShizukuAdapter.describe());
+        log("[*] shizuku 状态: " + ShizukuBridge.describe());
 
         // 2) 授权检查
-        if (!ShizukuAdapter.isGranted()) {
+        if (!ShizukuBridge.isGranted()) {
             log("[!] [兜底] GhostRoot 尚未获得 Shizuku 授权");
             log("[*]       请在弹窗中允许授权后重试");
             askShizukuPermission();
@@ -542,7 +542,7 @@ public class MainActivity extends Activity {
             log("[!] [兜底] Shizuku 通道未取得 shell 域");
             return null;
         }
-        log("[+] [兜底] shell 域已获取（Shizuku / " + ShizukuAdapter.selinuxContext() + "）");
+        log("[+] [兜底] shell 域已获取（Shizuku / " + ShizukuBridge.selinuxContext() + "）");
         return ss;
     }
 
@@ -551,7 +551,7 @@ public class MainActivity extends Activity {
         try {
             ui.post(new Runnable() {
                 @Override public void run() {
-                    try { ShizukuAdapter.requestPermission(SHIZUKU_REQ); }
+                    try { ShizukuBridge.requestPermission(SHIZUKU_REQ); }
                     catch (Throwable ignored) {}
                 }
             });
