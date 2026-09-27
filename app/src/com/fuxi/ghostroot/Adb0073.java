@@ -123,6 +123,45 @@ final class Adb0073 {
         return "0x" + Integer.toHexString(v);
     }
 
+    /**
+     * 只做「这是不是一个 ADB（adbd）端口」的判定，不建立可用会话。
+     *
+     * 为什么要单独做这一步：
+     *   Android 上大量 App 都会监听 127.0.0.1（例如 32145 这类端口），
+     *   单纯用「TCP 能不能连上」当判据会**误判成 0073 端口**。
+     *   正确判据是：连上后发一个 ADB CNXN 包，看对方是否回一个**合法 ADB 包**
+     *   （magic 校验通过，且 cmd ∈ {CNXN, STLS, AUTH}）。
+     *   普通 App 的 socket 不会说 ADB 协议。
+     *
+     * @return 握手成功返回版本信息描述，失败返回 null
+     */
+    String probe(String host, int port) {
+        Socket sock = null;
+        try {
+            sock = new Socket();
+            sock.connect(new InetSocketAddress(host, port), 400);
+            sock.setSoTimeout(700);
+            sock.setTcpNoDelay(true);
+
+            InputStream in = sock.getInputStream();
+            OutputStream out = sock.getOutputStream();
+
+            byte[] cnxn = packPacket(CMD_CNXN, ADB_VERSION, ADB_MAXDATA,
+                    BANNER.getBytes("UTF-8"));
+            writeAll(out, cnxn);
+
+            Pkt p = readPacket(in);   // 内部已做 magic 校验，非法会抛 IOException
+            if (p.cmd == CMD_STLS || p.cmd == CMD_CNXN || p.cmd == CMD_AUTH) {
+                return "adb:" + hex(p.cmd) + " ver=" + hex(p.arg0) + " maxdata=" + p.arg1;
+            }
+            return null;
+        } catch (Throwable t) {
+            return null;
+        } finally {
+            try { if (sock != null) sock.close(); } catch (Throwable ignored) {}
+        }
+    }
+
     String run(String host, int port, String cmd) {
         Socket sock = null;
         SSLSocket ssl = null;
