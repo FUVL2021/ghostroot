@@ -1,9 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">GhostRoot</string>
+    <string name="app_name">Vin的提权工具</string>
+
+    <!-- 主按钮 -->
     <string name="btn_run">一键提权</string>
     <string name="btn_running">执行中…</string>
-    <string name="status_idle">就绪。请确保已开启「无线调试」。</string>
+
+    <!-- 状态行 -->
+    <string name="status_idle">就绪。请先打开「无线调试」，再点上方按钮。</string>
+
+    <!-- 日志区 -->
+    <string name="log_hint">（日志将显示在这里）</string>
+    <string name="log_tip">提示：长按上方日志可选中 / 复制任意内容</string>
+
+    <!-- 以下为历史遗留（按钮已删除，字符串暂时保留以免 R.java 变动过大） -->
     <string name="btn_copy">复制日志</string>
     <string name="btn_save">保存到 /sdcard</string>
 </resources>
