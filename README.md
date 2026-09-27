@@ -1,7 +1,8 @@
 # GhostRoot
-
-> Android 图形化提权工具 —— 面向 **小米 13 (fuxi / SM8550)**，Android 16 / kernel 5.15.178
+> Android 图形化提权工具 —— 面向 **小米 8550（SM8550）平台**（实测机型：小米 13 / fuxi），Android 16 / kernel 5.15.178
 > **未解锁 Bootloader** 前提下的研究性 PoC。
+>
+> 内核提权 payload `libfuxi8550.so` 由 **御坂114514** 发布，声明支持**所有搭载小米 8550（SM8550）处理器的设备**。
 
 ⚠️ **仅供安全研究与自有设备测试使用。请勿用于未经授权的设备。**
 使用前请阅读 [DISCLAIMER.md](DISCLAIMER.md)。
@@ -277,10 +278,10 @@ python3 build/build_apk.py <classes.dex> <lib目录> <输出.apk>
 
 仓库**包含**提权内核 payload，以便直接复现完整链路：
 
-| 文件 | 大小 | 说明 |
-|---|---|---|
-| `libfuxi8550.so` | 1,889,584 B | 面向 **SM8550 / kernel 5.15.178** 的内核提权 payload（静态 ELF，`.so` 仅为命名习惯，实际是可执行镜像）。 |
-| `libghostroot.so` | 6,297,784 B | 0073 利用器（ADB 认证绕过 → 取得 `uid=2000` shell 域）。 |
+| 文件 | 大小 | 来源 | 说明 |
+|---|---|---|---|
+| `libfuxi8550.so` | 1,889,584 B | **御坂114514 发布** | SM8550 内核提权 payload（静态 ELF，`.so` 仅为命名习惯，实际是可执行镜像）。 |
+| `libghostroot.so` | 6,297,784 B | 本项目 | 0073 利用器（ADB 认证绕过 → 取得 `uid=2000` shell 域）。 |
 
 MD5：
 ```
@@ -288,10 +289,20 @@ MD5：
 da07fd63ba7dbd0f058f311cc2d9f41e  libghostroot.so
 ```
 
-> ⚠️ **`libfuxi8550.so` 的硬编码内核偏移只对「同一 ROM / 同一 kernel 版本」有效。**
-> 换机、换系统版本后必须按目标机的真实 `kallsyms` 重新生成，
+### `libfuxi8550.so` 来源与设备支持
+
+> **来源**：由 **御坂114514** 发布。
+> **设备支持**：**所有搭载小米 8550（SM8550）处理器的设备**。
+
+即：小米 13 (fuxi)、小米 13 Pro、小米 13 Ultra、Redmi K60 Pro、
+小米平板 6 / 6 Pro、MIX Fold 3 等 SM8550 机型均在声明支持范围内
+（具体可用性仍取决于各自 ROM / kernel 版本，见下方偏移警告）。
+
+> ⚠️ **内核偏移警告**：该 payload 内含硬编码内核符号偏移，
+> 只对**相同 ROM / 相同 kernel 版本**有效。
+> 换 ROM、换系统版本后可能需要按目标机的真实 `kallsyms` 调整，
 > 否则轻则无效，重则触发内核崩溃（RCU stall → 整机锁死，需长按电源重启）。
-> 本项目对应的实测环境见「设备前提」。
+> 本项目实测环境见「设备前提」。
 
 这些 `.so` 在 APK 构建时被原样打进 `lib/arm64-v8a/`；
 `.gitignore` 中**刻意没有** `*.so` 通配规则（见文件内 NOTE）。
@@ -387,10 +398,20 @@ da07fd63ba7dbd0f058f311cc2d9f41e  libghostroot.so
 - [ ] UI 重构、免责声明页、固化 RSA 密钥等待办。
 
 ---
+## 来源与致谢
 
+| 组件 | 来源 | 说明 |
+|---|---|---|
+| **`libfuxi8550.so`**（内核提权 payload） | **御坂114514 发布** | 声明支持 **所有搭载小米 8550（SM8550）处理器的设备**。 |
+| Shizuku API / AIDL / Provider jar | [RikkaApps/Shizuku](https://github.com/RikkaApps/Shizuku) | 用于「通道②」的 shell 域接入。 |
+| 其余源码（App 壳、0073 通道、构建脚本、文档） | 本项目 | — |
+
+`libfuxi8550.so` 由 **御坂114514** 发布，本项目仅将其**原样收录**用于研究与复现，
+版权与解释权归原作者所有。若原作者希望移除，请提 Issue，会立即处理。
+
+---
 ## 免责声明
 
 本项目为**安全研究**用途，旨在研究和披露特定设备/系统版本上的漏洞。
 详见 [DISCLAIMER.md](DISCLAIMER.md)。
-
 **禁止**用于任何未经授权的设备或非法目的。
