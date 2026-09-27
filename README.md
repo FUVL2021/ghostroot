@@ -240,7 +240,6 @@ adb shell pm install -r /data/local/tmp/GhostRoot.apk
 | UI 重构（单标题栏） | ✅ 完成 |
 | 免责声明页 | ✅ 完成 |
 | 成功收尾（清 tmp + 固化 adb_keys） | ✅ 代码完成，待真机复验 |
-| 代码拆分 / 清理中间产物 | ⏳ 待做 |
 
 ---
 
