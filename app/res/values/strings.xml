@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">GhostRoot</string>
+    <string name="btn_run">一键提权</string>
+    <string name="btn_running">执行中…</string>
+    <string name="status_idle">就绪。请确保已开启「无线调试」。</string>
+    <string name="btn_copy">复制日志</string>
+    <string name="btn_save">保存到 /sdcard</string>
+</resources>
