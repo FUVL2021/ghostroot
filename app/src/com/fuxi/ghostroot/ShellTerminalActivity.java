@@ -165,13 +165,13 @@ public class ShellTerminalActivity extends Activity {
         new Thread(new Runnable() {
             @Override public void run() {
                 if (useShizuku()) {
-                    final boolean ok = ShizukuAdapter.bootstrap(ShellTerminalActivity.this);
-                    String desc = ShizukuAdapter.describe();
-                    String err = ShizukuAdapter.lastError();
+                    final boolean ok = ShizukuBridge.bootstrap(ShellTerminalActivity.this);
+                    String desc = ShizukuBridge.describe();
+                    String err = ShizukuBridge.lastError();
                     log("[Shizuku] bootstrap=" + ok + (err.isEmpty() ? "" : " err=" + err));
                     log("[Shizuku] " + desc);
                     if (ok) {
-                        String id = ShizukuAdapter.exec("id");
+                        String id = ShizukuBridge.exec("id");
                         log("[Shizuku] id => " + (id == null ? "(null)" : id.trim()));
                         if (id != null && (id.contains("uid=2000") || id.contains("uid=0"))) {
                             setStatus("✅ Shizuku 通道可用 (uid=2000)", 0xFF4CAF50);
@@ -346,11 +346,11 @@ public class ShellTerminalActivity extends Activity {
         new Thread(new Runnable() {
             @Override public void run() {
                 if (useShizuku()) {
-                    boolean ok = ShizukuAdapter.bootstrap(ShellTerminalActivity.this);
+                    boolean ok = ShizukuBridge.bootstrap(ShellTerminalActivity.this);
                     if (!ok) {
-                        log("[!] Shizuku 不可用: " + ShizukuAdapter.lastError());
+                        log("[!] Shizuku 不可用: " + ShizukuBridge.lastError());
                     } else {
-                        String r = ShizukuAdapter.exec(cmd);
+                        String r = ShizukuBridge.exec(cmd);
                         log(r == null ? "(null)" : r);
                     }
                 } else {
