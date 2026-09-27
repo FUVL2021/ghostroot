@@ -146,6 +146,7 @@ da07fd63ba7dbd0f058f311cc2d9f41e  libghostroot.so
 │   └── src/com/fuxi/ghostroot/
 │       ├── MainActivity.java            ← 主界面（一键提权流水线 + 成功收尾）
 │       ├── ShellTerminalActivity.java   ← 独立 Shell 终端（双通道）
+│       ├── DisclaimerActivity.java      ← 免责声明页
 │       ├── Shell.java                   ← 通道抽象接口
 │       ├── Adb0073Shell.java            ← 通道①实现
 │       ├── ShizukuShell.java            ← 通道②实现
@@ -254,7 +255,8 @@ adb shell pm install -r /data/local/tmp/GhostRoot.apk
 - [ ] **清理中间产物**：仓库/工作区里的旧版本 APK 待归档到 `backup/`。
 - [ ] 提权后 **SELinux 网络缓存可能被污染** → enforcing 下断网 / App 闪退。
       这是 exploit 的副作用（连带破坏 `sel_netif` 等缓存），
-      需要用「重载 SELinux 策略 + 重建 lo」的方式修复。
+      需要用「重载 SELinux 策略 + 重建 lo」的方式修复（见
+      [selinux-netfix](https://github.com/FUVL2021/selinux-netfix)）。
 
 ---
 
