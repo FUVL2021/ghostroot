@@ -137,14 +137,13 @@ da07fd63ba7dbd0f058f311cc2d9f41e  libghostroot.so
 ├── README.md                  ← 本文
 ├── DISCLAIMER.md              ← 免责声明
 ├── build/
-│   └── build_apk.py           ← 一键打包脚本（支持 DEX 加密模式）
+│   └── build_apk.py           ← 一键打包脚本
 ├── app/
 │   ├── AndroidManifest.xml    ← 含 Shizuku provider 声明
 │   ├── libs/                  ← Shizuku API/AIDL/Provider jar
 │   ├── lib/arm64-v8a/         ← 内核 payload（见上节）
 │   ├── res/                   ← 原始资源（文本，供 aapt 编译）
 │   └── src/com/fuxi/ghostroot/
-│       ├── StubApp.java                 ← ★ DEX 解密壳（Application）
 │       ├── MainActivity.java            ← 主界面（一键提权流水线 + 成功收尾）
 │       ├── ShellTerminalActivity.java   ← 独立 Shell 终端（双通道）
 │       ├── Shell.java                   ← 通道抽象接口
@@ -161,49 +160,6 @@ da07fd63ba7dbd0f058f311cc2d9f41e  libghostroot.so
 └── docs/
     └── INSTALL.md              ← 安装与使用
 ```
-
----
-
-## DEX 加密（防篡改）
-
-APK 采用**整体 DEX 加密**，直接解包只能看到一个空壳：
-
-```
-APK 结构：
-├── classes.dex          ← 明文壳（仅 StubApp + R + Shizuku 类）
-├── assets/app.dex.enc   ← 业务 dex（AES-128-ECB 加密）
-└── lib/arm64-v8a/*.so   ← 两个 payload（保持原样）
-```
-
-**运行流程**：`StubApp.onCreate()`（进程最早执行）→ 读 `assets/app.dex.enc`
-→ AES 解密到内存 → `InMemoryDexClassLoader` 加载 → 把「解密 loader」接进
-AppClassLoader 的 `parent` 链，使系统组件也能解析业务类。
-
-### 两条必须遵守的约束（踩坑记录）
-
-1. **`ContentProvider` 引用的类不能加密。**
-   系统在 `Application.onCreate()` **之前**就实例化 Provider，
-   所以 `rikka.shizuku.ShizukuProvider` 及其依赖的 Shizuku 类
-   （`rikka.*` / `moe.*` / `sui.*`，共 47 个）**必须留在明文 `classes.dex`**。
-   否则启动即崩：
-   ```
-   java.lang.RuntimeException: Unable to get provider rikka.shizuku.ShizukuProvider:
-   java.lang.ClassNotFoundException: Didn't find class "rikka.shizuku.ShizukuProvider"
-   ```
-
-2. **不要合并 `dexElements`，要改 `parent` 链。**
-   把解密 loader 的 `dexElements` 合并进 AppClassLoader 会让同一个 dex
-   被两个 ClassLoader 注册，ART 直接拒绝：
-   ```
-   java.lang.InternalError: Attempt to register dex file ... with multiple class loaders
-   ```
-   正确做法是把 AppClassLoader 的 `parent` 指向解密 loader：
-   ```
-   AppClassLoader → parent → 解密Loader → BootClassLoader
-   ```
-
-> 加密强度说明：密钥在 `StubApp`（byte 数组形式）。这是**提高「随手改」门槛**，
-> 不是绝对安全 —— 本地加固都有这个上限。
 
 ---
 
@@ -282,7 +238,6 @@ adb shell pm install -r /data/local/tmp/GhostRoot.apk
 | 0073 端口扫描（ADB 握手判定） | ✅ 真机跑通 |
 | UI 重构（单标题栏） | ✅ 完成 |
 | 免责声明页 | ✅ 完成 |
-| DEX 加密壳 | ✅ 完成（真机验证） |
 | 成功收尾（清 tmp + 固化 adb_keys） | ✅ 代码完成，待真机复验 |
 | 代码拆分 / 清理中间产物 | ⏳ 待做 |
 
@@ -309,7 +264,7 @@ adb shell pm install -r /data/local/tmp/GhostRoot.apk
 |---|---|---|
 | **`libfuxi8550.so`**（内核提权 payload） | **御坂114514 发布** | 声明支持 **所有搭载小米 8550（SM8550）处理器的设备**。 |
 | Shizuku API / AIDL / Provider jar | [RikkaApps/Shizuku](https://github.com/RikkaApps/Shizuku) | 用于「通道②」的 shell 域接入。 |
-| 其余源码（App 壳、0073 通道、DEX 加密、构建脚本、文档） | 本项目（酷安 FUVL2210） | — |
+| 其余源码（Android 端、0073 通道、构建脚本、文档） | 本项目（酷安 FUVL2210） | — |
 
 `libfuxi8550.so` 由 **御坂114514** 发布，本项目仅将其**原样收录**用于研究与复现，
 版权与解释权归原作者所有。若原作者希望移除，请提 Issue，会立即处理。
