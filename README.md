@@ -273,9 +273,31 @@ python3 build/build_apk.py <classes.dex> <lib目录> <输出.apk>
 流程：`aapt package` 编骨架 → 拼装（arsc STORED）→ `zipalign` → `apksigner`。
 
 ---
+## Payload（`app/lib/arm64-v8a/`）
 
+仓库**包含**提权内核 payload，以便直接复现完整链路：
+
+| 文件 | 大小 | 说明 |
+|---|---|---|
+| `libfuxi8550.so` | 1,889,584 B | 面向 **SM8550 / kernel 5.15.178** 的内核提权 payload（静态 ELF，`.so` 仅为命名习惯，实际是可执行镜像）。 |
+| `libghostroot.so` | 6,297,784 B | 0073 利用器（ADB 认证绕过 → 取得 `uid=2000` shell 域）。 |
+
+MD5：
+```
+142355ab39b9205f2cb673afd430fa3c  libfuxi8550.so
+da07fd63ba7dbd0f058f311cc2d9f41e  libghostroot.so
+```
+
+> ⚠️ **`libfuxi8550.so` 的硬编码内核偏移只对「同一 ROM / 同一 kernel 版本」有效。**
+> 换机、换系统版本后必须按目标机的真实 `kallsyms` 重新生成，
+> 否则轻则无效，重则触发内核崩溃（RCU stall → 整机锁死，需长按电源重启）。
+> 本项目对应的实测环境见「设备前提」。
+
+这些 `.so` 在 APK 构建时被原样打进 `lib/arm64-v8a/`；
+`.gitignore` 中**刻意没有** `*.so` 通配规则（见文件内 NOTE）。
+
+---
 ## 目录结构
-
 ```
 .
 ├── README.md                  ← 本文
@@ -285,6 +307,7 @@ python3 build/build_apk.py <classes.dex> <lib目录> <输出.apk>
 ├── app/
 │   ├── AndroidManifest.xml    ← 含 Shizuku provider 声明
 │   ├── libs/                  ← Shizuku API/AIDL/Provider jar
+│   ├── lib/arm64-v8a/         ← 内核 payload（见上节）
 │   ├── res/                   ← 原始资源（文本，供 aapt 编译）
 │   └── src/com/fuxi/ghostroot/
 │       ├── MainActivity.java            ← 主界面（一键提权流水线）
@@ -335,8 +358,25 @@ python3 build/build_apk.py <classes.dex> <lib目录> <输出.apk>
 
 ---
 
-## 已知问题 / 待办
+## 项目状态（务必先读）
 
+| 模块 | 状态 |
+|---|---|
+| CVE-2026-0073 通道（Java / C 实现） | ✅ 真机跑通，可取得 shell 域 |
+| SM8550 kernel 提权 payload | ✅ 真机跑通 |
+| Shizuku 通道（provider 推 binder 修正） | ⚠️ **代码已修正为官方机制，尚待真机复验** |
+| 0073 端口自动扫描 | ⚠️ **不完善**，见「已知问题」 |
+| UI / 打包链 | ✅ 可构建出可安装 APK |
+
+> **本仓库是研究用原型，不是"开箱即用"的成品软件。**
+> Shizuku 通道与端口扫描两块仍在修，请以源码 + 踩坑记录为主要参考价值。
+
+---
+## 已知问题 / 待办
+- [ ] **Shizuku 通道待真机复验**：已按反编译结论修正为「App 声明 provider，等
+      Shizuku 服务端 `call(..., "sendBinder", ...)` 推 binder」，但尚未回传
+      `✅ Shizuku 通道可用 (uid=2000)` 的实测日志。安装后若 Shizuku 授权列表里
+      没有本 App，需**卸载重装**（provider 在安装时注册）。
 - [ ] **0073 端口扫描太弱**：目前只试 11 个固定端口（5555 + 37000~45000 段）。
       Android 16 上 `/proc/net/tcp` 对普通 App 不可读（`Permission denied`），
       需另找枚举方式（如通过 Shizuku 拿 shell 域后读，或扩大扫描范围 + 并发）。

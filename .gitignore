@@ -1,46 +1,30 @@
-# 构建产物
+# ---- build outputs ----
+*.class
+*.dex
 *.apk
 *.idsig
-*.dex
-*.class
-build/*.apk
-build/*.idsig
-classes/
-classes*/
-dexout/
-dexout*/
-
-# 中间产物
-/tmp/
-*.o
-*.so
-!app/libs/*.so
-
-# 大文件 / 二进制 payload（体积过大，不适合入库）
-ghostroot_arm64
-ghostroot_arm64.new
-libentryy.so
-*.btf
-*.vmlinux
-
-# 密钥（不要提交私钥！）
 *.keystore
 *.jks
-*.pem
-*.pk8
-!build/debug.keystore.example
+build/out/
+build/tmp/
+out/
+dist/
 
-# 编辑器 / 系统
-.idea/
-.vscode/
+# ---- local scratch ----
+*.log
+*.tmp
 *.swp
 .DS_Store
 Thumbs.db
 
-# Python
-__pycache__/
-*.py[cod]
+# ---- IDE ----
+.idea/
+*.iml
+.gradle/
+.gradle/
+local.properties
 
-# 日志
-*.log
-logs/
+# NOTE:
+#   app/lib/arm64-v8a/*.so  ARE tracked on purpose
+#   (libfuxi8550.so, libghostroot.so) -- see README "Payload" section.
+#   Do NOT add a blanket "*.so" rule here.
