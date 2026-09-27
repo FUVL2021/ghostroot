@@ -40,7 +40,7 @@ public class ShellTerminalActivity extends Activity {
     private TextView status;
     private EditText input;
     private EditText portIn;
-    private Button runBtn, probeBtn, copyBtn, saveBtn;
+    private Button runBtn, probeBtn;
     private RadioGroup channelGroup;
 
     /** 已探测可用的 0073 端口（-1 = 未探测到）。 */
@@ -87,7 +87,7 @@ public class ShellTerminalActivity extends Activity {
         portLbl.setTextColor(0xFF8B949E);
         portLbl.setTextSize(12);
         portIn = new EditText(this);
-        portIn.setHint("留空=自动扫描 30000-50000");
+        portIn.setHint("留空=自动扫描(候选+全段)");
         portIn.setInputType(InputType.TYPE_CLASS_NUMBER);
         portIn.setTextSize(12);
         portIn.setLayoutParams(new LinearLayout.LayoutParams(0,
@@ -139,18 +139,8 @@ public class ShellTerminalActivity extends Activity {
         root.addView(scroll);
 
         // ---- 操作按钮行 ----
-        LinearLayout ops = new LinearLayout(this);
-        ops.setOrientation(LinearLayout.HORIZONTAL);
-        copyBtn = new Button(this);
-        copyBtn.setText("复制日志");
-        saveBtn = new Button(this);
-        saveBtn.setText("保存到 /sdcard");
-        ops.addView(copyBtn, new LinearLayout.LayoutParams(0,
-                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        ops.addView(saveBtn, new LinearLayout.LayoutParams(0,
-                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        root.addView(ops);
-
+        // 注：v29 起删除「复制日志 / 保存到 sdcard」按钮 ——
+        //     日志区 output 已设 textIsSelectable，长按即可选中复制。
         setContentView(root);
 
         probeBtn.setOnClickListener(new View.OnClickListener() {
@@ -158,12 +148,6 @@ public class ShellTerminalActivity extends Activity {
         });
         runBtn.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { exec(); }
-        });
-        copyBtn.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { copyLog(); }
-        });
-        saveBtn.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { saveLog(); }
         });
 
         log("Shell 终端就绪（双通道）。");
@@ -219,28 +203,115 @@ public class ShellTerminalActivity extends Activity {
         }, "probe").start();
     }
 
-    /** 扫描无线调试端口：先猜常见值，再范围扫。 */
+    /**
+     * 扫描无线调试（adbd）端口。
+     *
+     * 背景（实测）：
+     *   - 本地回环上「端口未监听」时 connect() 会**立刻**返回 ECONNREFUSED（实测 <1ms），
+     *     所以扫全网段并不慢，真正的瓶颈只是 connect() 系统调用本身。
+     *   - 小米 / HyperOS 的无线调试端口**不在固定值上**，实测某台 fuxi 上是 32145，
+     *     既不是 5555 也不在 37000~45000 常见段 —— 旧版只试 11 个固定端口，
+     *     所以「点完立刻弹失败」。
+     *   - Android 10+ 上 /proc/net/tcp 对普通 App 不可读（Permission denied），
+     *     无法直接枚举 LISTEN 端口，只能主动 connect 探测。
+     *
+     * 策略：
+     *   1) 用户手填优先；
+     *   2) 先试一批「高概率候选」（5555 / 32145 / 37000+ 常见段等），命中即返回；
+     *   3) 未命中则做 5000~65535 全段**并发**扫描，命中即停。
+     */
     private int probe0073() {
-        // 用户手填优先
+        // 1) 用户手填优先
         String manual = portIn.getText() == null ? "" : portIn.getText().toString().trim();
         if (!manual.isEmpty()) {
-            try { return Integer.parseInt(manual); } catch (Throwable ignored) {}
+            try {
+                int p = Integer.parseInt(manual);
+                log("[0073] 使用手填端口 " + p);
+                return p;
+            } catch (Throwable ignored) {}
         }
-        log("[0073] 扫描 127.0.0.1 上监听的端口……");
-        // 用 /proc/net/tcp 找本机 LISTEN 的端口（App 可读自己 uid 的，shell 不行——
-        // 这里退化为纯连接测试常见端口段）
-        int[] common = {5555, 37000, 37001, 38000, 39000, 40000, 41000, 42000, 43000, 44000, 45000};
-        for (int p : common) {
-            if (tcpAlive(p)) { log("[0073] 命中端口 " + p); return p; }
+
+        // 2) 高概率候选（实测小米无线调试端口可能落在非常规位置，这里覆盖常见值）
+        int[] candidates = {
+                5555,                                   // 标准 adb tcp
+                32145,                                  // 实测 fuxi/HyperOS 无线调试端口
+                37000, 37001, 38000, 39000, 40000,      // 旧版覆盖区间
+                41000, 42000, 43000, 44000, 45000,
+                5037,                                   // adb server 默认
+                5556, 5557, 5558, 5559                  // 多设备 adb tcp
+        };
+        for (int p : candidates) {
+            String hs = new Adb0073().probe("127.0.0.1", p);
+            if (hs != null) {
+                log("[0073] 候选端口 " + p + " ADB 握手成功 (" + hs + ")");
+                return p;
+            }
         }
-        return -1;
+
+        // 3) 全段并发扫描（判据同样是「会说 ADB 协议」，而非仅 TCP 可连）
+        log("[0073] 候选未命中，开始并发扫描 5000-65535 …（按 ADB 握手判定，命中即停）");
+        final int found = scanRangeConcurrent(5000, 65535, 96);
+        if (found > 0) {
+            log("[0073] 扫描命中端口 " + found);
+            setStatus("✅ 找到 ADB 端口 " + found, 0xFF4CAF50);
+        } else {
+            log("[0073] 扫描结束，未发现会响应 ADB 握手的端口（无线调试没开？）");
+        }
+        return found;
     }
 
-    private boolean tcpAlive(int port) {
+    /**
+     * 多线程并发扫描 [from, to] 闭区间，返回第一个可连接端口（否则 -1）。
+     * 采用「分块 + 提前退出」：每块内串行、块间并发，命中后置位退出。
+     */
+    private int scanRangeConcurrent(final int from, final int to, final int threads) {
+        final java.util.concurrent.atomic.AtomicInteger hit =
+                new java.util.concurrent.atomic.AtomicInteger(-1);
+        final java.util.concurrent.atomic.AtomicInteger cursor =
+                new java.util.concurrent.atomic.AtomicInteger(from);
+        final int total = to - from + 1;
+        final java.util.concurrent.atomic.AtomicInteger done =
+                new java.util.concurrent.atomic.AtomicInteger(0);
+        final int chunk = 64; // 每个线程每次领 64 个端口
+
+        Thread[] pool = new Thread[threads];
+        for (int i = 0; i < threads; i++) {
+            pool[i] = new Thread(new Runnable() {
+                @Override public void run() {
+                    while (hit.get() < 0) {
+                        int start = cursor.getAndAdd(chunk);
+                        if (start > to) return;
+                        int end = Math.min(start + chunk - 1, to);
+                        for (int p = start; p <= end; p++) {
+                            if (hit.get() >= 0) return;
+                            // ① 先做极快的 TCP 连通性筛选（未监听端口瞬时 ECONNREFUSED）
+                            if (!tcpAlive(p, 120)) continue;
+                            // ② 只有连得上的端口才做 ADB 握手，避免 6 万次 700ms 超时
+                            if (new Adb0073().probe("127.0.0.1", p) != null) {
+                                hit.compareAndSet(-1, p);
+                                return;
+                            }
+                        }
+                        int d = done.addAndGet(end - start + 1);
+                        if (d % 4000 == 0) {
+                            setStatus("扫描中… " + d + "/" + total, 0xFFFFC107);
+                        }
+                    }
+                }
+            }, "scan-" + i);
+            pool[i].start();
+        }
+        for (Thread t : pool) {
+            try { t.join(); } catch (Throwable ignored) {}
+        }
+        return hit.get();
+    }
+
+    private boolean tcpAlive(int port, int timeoutMs) {
         java.net.Socket s = null;
         try {
             s = new java.net.Socket();
-            s.connect(new java.net.InetSocketAddress("127.0.0.1", port), 300);
+            s.connect(new java.net.InetSocketAddress("127.0.0.1", port), timeoutMs);
             return true;
         } catch (Throwable t) {
             return false;
