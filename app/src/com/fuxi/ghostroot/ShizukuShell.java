@@ -25,7 +25,7 @@ public class ShizukuShell implements Shell {
     @Override public String name() { return "Shizuku"; }
 
     @Override public String exec(String cmd) {
-        String r = ShizukuAdapter.exec(cmd);
+        String r = ShizukuBridge.exec(cmd);
         if (r == null) {
             logBuf.append("[-] Shizuku exec failed: ").append(cmd).append("\n");
         }
@@ -45,7 +45,7 @@ public class ShizukuShell implements Shell {
             String src = libDir + "/libfuxi8550.so";
             logBuf.append("[*] shizuku cp ").append(src).append(" -> ").append(remote).append("\n");
 
-            String c = ShizukuAdapter.exec(
+            String c = ShizukuBridge.exec(
                     "cp " + src + " " + remote + " 2>&1; "
                     + "chmod 755 " + remote + " 2>&1; "
                     + "ls -l " + remote + "; stat -c %s " + remote);
@@ -61,7 +61,7 @@ public class ShizukuShell implements Shell {
     }
 
     @Override public boolean verify() {
-        String id = ShizukuAdapter.exec("id");
+        String id = ShizukuBridge.exec("id");
         if (id == null) return false;
         return id.indexOf("uid=2000") >= 0 || id.indexOf("uid=0") >= 0;
     }
