@@ -2,7 +2,7 @@
 > Android 图形化提权工具 —— 面向 **小米 8550（SM8550）平台**（实测机型：小米 13 / fuxi），Android 16 / kernel 5.15.178
 > **未解锁 Bootloader** 前提下的研究性 PoC。
 >
-> 内核提权 payload `libfuxi8550.so` 由 **御坂114514** 发布，声明支持**所有搭载小米 8550（SM8550）处理器的设备**。
+> 内核提权 payload `libfuxi8550` 由 **御坂114514** 发布，声明支持**所有搭载小米 8550（SM8550）处理器的设备**。
 
 ⚠️ **仅供安全研究与自有设备测试使用。请勿用于未经授权的设备。**
 使用前请阅读 [DISCLAIMER.md](DISCLAIMER.md)。
@@ -30,7 +30,7 @@ GhostRoot 是一个 **APK 形态**的提权工具。它把两条「获取 `shell
 │                    ↓                                      │
 │           shell 域 (uid=2000 / u:r:shell:s0)             │
 │                    ↓                                      │
-│        内核漏洞提权 → root 域                             │
+│        CVE-2026-43499提权 → root 域                             │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -40,7 +40,7 @@ GhostRoot 是一个 **APK 形态**的提权工具。它把两条「获取 `shell
 
 | 项 | 值 |
 |---|---|
-| 机型 | 小米 13 (fuxi, 型号 2211133C) |
+| 机型 | 小米 XIAOMI |
 | SoC | Snapdragon 8 Gen 2 (SM8550 / kalama) |
 | 系统 | HyperOS OS3.0.307.0.WMCCNXM |
 | Android | 16 (SDK 36) |
@@ -77,203 +77,6 @@ App 通过 Shizuku 的 binder 借它的权限执行命令 —— 拿到的是**�
 （推送 payload / 执行提权）**与通道无关**，可无缝切换。
 
 ---
-
-## Shizuku 接入的正确姿势（踩坑记录）
-
-这一节是**最有价值的部分之一**，因为网上绝大多数资料是错的。
-
-### ❌ 错误做法
-
-```java
-// App 主动去 call Shizuku 的 provider
-cr.call(Uri.parse("content://moe.shizuku.privileged.api.shizuku"), "getBinder", ...);
-```
-
-会得到：
-
-```
-java.lang.SecurityException: Permission Denial: opening provider
-moe.shizuku.manager.ShizukuManagerProvider from ProcessRecord{...}
-requires android.permission.INTERACT_ACROSS_USERS_FULL
-```
-
-因为 `moe.shizuku.manager.ShizukuManagerProvider` 是 Shizuku **管理界面自用**的
-provider，不是给第三方 App 的接口。
-
-### ✅ 正确机制（反编译官方字节码得出）
-
-**方向是反的** —— 不是 App 去「拉」，而是 Shizuku 服务端主动「推」：
-
-```
-Shizuku 服务端 (shell 域)
-   └─ call(content://<你的包名>.shizuku, "sendBinder", bundle)
-          │   bundle 里带 EXTRA_BINDER = BinderContainer(binder)
-          ↓
-   你的 App 自己声明的 provider
-   rikka.shizuku.ShizukuProvider.handleSendBinder()
-          └─ BinderContainer.binder → Shizuku.onBinderReceived(binder, pkgName)
-          ↓
-   之后 Shizuku.pingBinder() == true，exec 可用
-```
-
-**关键点**（全部从字节码实证）：
-
-1. **authority 必须是 `<你的包名>.shizuku`**
-   —— 官方代码是 `"content://" + context.getPackageName() + ".shizuku"` 硬拼的。
-   本项目：`com.fuxi.ghostroot.shizuku`
-
-2. **必须由你的 App 自己声明这个 provider**（写进 Manifest）：
-
-```xml
-<provider
-    android:name="rikka.shizuku.ShizukuProvider"
-    android:authorities="com.fuxi.ghostroot.shizuku"
-    android:exported="true"        <!-- 必须 true -->
-    android:multiprocess="false"   <!-- 必须 false -->
-    android:enabled="true" />
-```
-
-   ⚠️ `exported=false` 或 `multiprocess=true` 会在 `attachInfo()` 里
-   直接抛 `IllegalStateException`。
-
-3. **Manifest 还要有权限 + meta-data**：
-
-```xml
-<uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
-
-<application ...>
-    <meta-data
-        android:name="moe.shizuku.client.V3_SUPPORT"
-        android:value="true" />
-```
-
-   这两项是 Shizuku 服务端**校验调用方**用的，运行时改不了，只能写进 Manifest。
-
-4. **binder 在 Bundle 里的 key**：
-   `moe.shizuku.privileged.api.intent.extra.BINDER`
-   值是 **`moe.shizuku.api.BinderContainer`**（Parcelable），
-   **不是** `IBinder` —— 要取它的 public 字段 `.binder`。
-   （`BinderContainer` 在 `shizuku-provider.jar` 里，编译和 d8 都要带上。）
-
-5. **进程不是 provider 进程时**，用官方 API：
-   `ShizukuProvider.requestBinderForNonProviderProcess(ctx)`
-   —— 它内部会注册 `BINDER_RECEIVED` 广播 + call 自己的 provider。
-
-> 常量速查表：
->
-> | 常量 | 值 |
-> |---|---|
-> | `PERMISSION` | `moe.shizuku.manager.permission.API_V23` |
-> | `MANAGER_APPLICATION_ID` | `moe.shizuku.privileged.api` |
-> | `METHOD_SEND_BINDER` | `sendBinder` |
-> | `METHOD_GET_BINDER` | `getBinder` |
-> | `ACTION_BINDER_RECEIVED` | `moe.shizuku.api.action.BINDER_RECEIVED` |
-> | `EXTRA_BINDER` | `moe.shizuku.privileged.api.intent.extra.BINDER` |
-
----
-
-## 无 Gradle / 无 aapt2 的构建方式（踩坑记录）
-
-本项目**刻意不使用 Gradle**。原因：目标环境（Android + proot）里 aapt2 会 SIGILL，
-且需要最大限度控制产物。整套构建链是手工串起来的。
-
-### 工具链
-
-| 工具 | 说明 |
-|---|---|
-| `aapt` | **必须用 `qemu-x86_64-static` 包一层**，否则 SIGILL（见下） |
-| `javac` | 编译 Java，`-bootclasspath android34.jar`，**不能用 lambda**（jar 里没 `LambdaMetafactory`） |
-| `d8.jar` | dex 转换 |
-| `zipalign` | 4 字节对齐（同样要 qemu 包一层） |
-| `apksigner.jar` | 签名（v1+v2+v3） |
-
-### 🔑 关键突破：x86_64 Android 工具用 qemu 包一层就能跑
-
-```bash
-# ❌ 直接执行 → SIGILL (rc=132)
-/tmp/btx/android-14/aapt v
-
-# ✅ qemu 包一层 → 正常
-qemu-x86_64-static /tmp/btx/android-14/aapt v
-# Android Asset Packaging Tool, v0.2-10229193
-```
-
-这一条解决了「无法用官方工具验证产物」的死结，`aapt dump badging / xmltree / resources`
-全部可用。同样适用于 `zipalign`。
-
-### 📦 打包铁律（血泪教训）
-
-**1. 绝对不要手写 Python 拼二进制 AXML。**
-
-我们试过手改二进制 AXML 注入 `<activity>`，字节能对上、apktool 能解，
-但 **`PackageManager` 拒绝**（报「解析软件包时出现问题。(33)」+ `packageInfo is null`）。
-
-原因：`aapt` 能解 ≠ `PackageParser` 能解，两者校验标准不同。手拼的 AXML
-与官方编译产物**结构不等价**（官方 3040 字节 vs 手拼 3048 字节）。
-
-**✅ 正确做法：用文本 Manifest + aapt 编译，拿官方产物。**
-
-```bash
-qemu-x86_64-static aapt package -f \
-    -M app/AndroidManifest.xml \
-    -S app/res \
-    -I android34.jar \
-    -F skeleton.apk
-```
-
-产出 `AndroidManifest.xml` + `resources.arsc` + `res/layout/main.xml` 官方三件套，
-`PackageParser` 必然接受。
-
-**2. `resources.arsc` 必须用 STORED（不压缩）。**
-
-Android 10+ 要求 `resources.arsc` 未压缩且 4 字节对齐，否则 `PackageParser` 拒绝。
-
-```python
-w.writestr(zipfile.ZipInfo('resources.arsc'), arsc_data, zipfile.ZIP_STORED)
-```
-
-**3. `R.java` 的常量必须与 `arsc` 里的实际 ID 一致。**
-
-这是最阴的坑：换用 aapt 重编后**资源 ID 会重新分配**，
-如果 `R.java` 还是旧值，`findViewById()` 会返回 `null` → `NullPointerException` 闪退。
-
-```bash
-# 拿权威 ID
-qemu-x86_64-static aapt dump resources GhostRoot.apk | grep 'id/'
-```
-
-本项目的实例：aapt 重编后
-
-| 资源 | 旧 `R.java` | 实际 `arsc` |
-|---|---|---|
-| `id/run` | `0x7f010002` | `0x7f050000` |
-| `id/scroll` | `0x7f010004` | `0x7f050001` |
-| `id/output` | `0x7f010001` | `0x7f050002` |
-| `id/copy` | `0x7f010000` | `0x7f050003` |
-| `id/save` | `0x7f010003` | `0x7f050004` |
-| `layout/main` | `0x7f020000` | `0x7f020000` ✅（唯一幸存） |
-
-> `layout/main` 恰好没变，所以界面能出来，但 5 个 id 全错位 → 一点按钮就闪退。
-
-**4. `-source 8` 下不能用 lambda**，全部改匿名内部类。
-
-```
-error: cannot access LambdaMetafactory
-```
-
-因为 `android34.jar` 里没有这个符号。本项目所有回调都是 `new View.OnClickListener(){...}`。
-
-### 构建脚本
-
-见 [`build/build_apk.py`](build/build_apk.py)：
-
-```bash
-python3 build/build_apk.py <classes.dex> <lib目录> <输出.apk>
-```
-
-流程：`aapt package` 编骨架 → 拼装（arsc STORED）→ `zipalign` → `apksigner`。
-
----
 ## Payload（`app/lib/arm64-v8a/`）
 
 仓库**包含**提权内核 payload，以便直接复现完整链路：
@@ -300,8 +103,6 @@ da07fd63ba7dbd0f058f311cc2d9f41e  libghostroot.so
 
 > ⚠️ **内核偏移警告**：该 payload 内含硬编码内核符号偏移，
 > 只对**相同 ROM / 相同 kernel 版本**有效。
-> 换 ROM、换系统版本后可能需要按目标机的真实 `kallsyms` 调整，
-> 否则轻则无效，重则触发内核崩溃（RCU stall → 整机锁死，需长按电源重启）。
 > 本项目实测环境见「设备前提」。
 
 这些 `.so` 在 APK 构建时被原样打进 `lib/arm64-v8a/`；
