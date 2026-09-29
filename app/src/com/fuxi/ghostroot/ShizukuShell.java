@@ -26,8 +26,8 @@ public class ShizukuShell implements Shell {
 
     @Override public String exec(String cmd) {
         String r = ShizukuBridge.exec(cmd);
-        if (r == null) {
-            logBuf.append("[-] Shizuku exec failed: ").append(cmd).append("\n");
+        if (r == null || r.length() == 0) {
+            logBuf.append("[-] Shizuku exec 空结果: ").append(cmd).append("\n");
         }
         return r;
     }
