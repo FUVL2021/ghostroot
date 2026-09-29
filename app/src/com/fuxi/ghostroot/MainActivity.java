@@ -419,6 +419,7 @@ public class MainActivity extends Activity {
         // 1) 手动绑定 Shizuku binder（替代 ShizukuProvider）
         boolean boot = ShizukuBridge.bootstrap(this);
         log("[*] shizuku bootstrap = " + boot);
+                log("[*] lastError = " + ShizukuBridge.lastError());
         if (!boot || !ShizukuBridge.isBinderAlive()) {
             log("[!] [兜底] 未检测到运行中的 Shizuku");
             log("[*]       如需使用兜底通道：安装并启动 Shizuku（ADB 模式）后重试");
@@ -472,8 +473,10 @@ public class MainActivity extends Activity {
         log("[*] [兜底] 用户选择使用 Shizuku，正在验证 shell 域 ...");
         ShizukuShell ss = new ShizukuShell(this);
         String id = ss.exec("id");
-        log(id == null ? "(null)" : id);
+        log(id == null ? "(null)" : (id.length() == 0 ? "(空)" : id));
+        log(ss.log());          // 把 exec 过程的诊断一并输出
         if (!ss.verify()) {
+            log(ss.log());      // verify 的第二次 exec 也输出
             log("[!] [兜底] Shizuku 通道未取得 shell 域");
             return null;
         }
