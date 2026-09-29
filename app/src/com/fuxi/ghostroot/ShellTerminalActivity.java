@@ -134,6 +134,8 @@ public class ShellTerminalActivity extends Activity {
         output.setTextColor(0xFFC9D1D9);
         output.setTextSize(11);
         output.setMovementMethod(ScrollingMovementMethod.getInstance());
+        output.setTextIsSelectable(true);
+        output.setLongClickable(true);
         scroll.addView(output, new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         root.addView(scroll);
