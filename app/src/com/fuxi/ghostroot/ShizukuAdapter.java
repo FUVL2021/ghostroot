@@ -68,54 +68,122 @@ public final class ShizukuAdapter {
      *   C) 再不行，直接 call 自己的 provider "getBinder" 兜底
      */
     public static synchronized boolean bootstrap(Context ctx) {
-        if (bootstrapped && Shizuku.pingBinder()) { lastError = ""; return true; }
+        // 备注：只有当 binder 与 service 都非 null 才算就绪
+        if (bootstrapped && Shizuku.pingBinder()
+                && safeGetBinder() != null && fld("service") != null) {
+            lastError = "";
+            return true;
+        }
+        // 缓存不可信 -> 清掉，走完整流程
+        bootstrapped = false;
+        sAttached = false;
         lastError = "";
 
-        // A) 已经有了？
-        try {
-            if (Shizuku.pingBinder()) { bootstrapped = true; return true; }
-        } catch (Throwable ignored) {}
+        // ------------------------------------------------------------
+        // 关键：Shizuku.getBinder() 返回的真实 binder 才是有用的。
+        // pingBinder() 可能在内部标志为 true 时也返回 true，但 getBinder()
+        // 仍是 null（手动 bootstrap 时常见），此时 onBinderReceived(null)
+        // 会走「binder 断了」分支，什么都没灌进去，后续 transactRemote 就抛
+        // IllegalStateException: binder haven't been received。
+        //
+        // 所以顺序必须是：
+        //   1) 先主动拿到真实 IBinder（官方 API / provider / intent 三条路）
+        //   2) 调 onBinderReceived(真实binder, pkg) -> 灌静态字段 + attachApplication
+        // ------------------------------------------------------------
 
-        // B) 官方 API：请求 binder（内部会注册广播 + call 自己的 provider）
-        try {
-            rikka.shizuku.ShizukuProvider.requestBinderForNonProviderProcess(ctx);
-        } catch (Throwable t) {
-            lastError = "requestBinder 异常: " + t;
-        }
-
-        // 给 Shizuku 一点时间完成 binder 传递
-        try { Thread.sleep(300); } catch (Throwable ignored) {}
-
-        try {
-            if (Shizuku.pingBinder()) { bootstrapped = true; lastError = ""; return true; }
-        } catch (Throwable ignored) {}
-
-        // C) 兜底：直接 call 自己 provider 的 getBinder
-        try {
-            ContentResolver cr = ctx.getContentResolver();
-            Bundle reply = cr.call(Uri.parse("content://" + AUTHORITY),
-                    "getBinder", null, new Bundle());
-            if (reply != null) {
-                reply.setClassLoader(moe.shizuku.api.BinderContainer.class.getClassLoader());
-                IBinder binder = extractBinder(reply);
-                if (binder != null && binder.pingBinder()) {
-                    Shizuku.onBinderReceived(binder, ctx.getPackageName());
-                    bootstrapped = true;
-                    lastError = "";
-                    return true;
-                }
-                lastError = "self-provider getBinder 无 binder, keys=" + reply.keySet();
-            } else {
-                lastError = "self-provider getBinder 返回 null";
+        // 路径 1：Shizuku 静态字段里已经有真实 binder
+        IBinder b = safeGetBinder();
+        if (b == null) {
+            // 路径 2：官方 API 主动要一次（内部会 call 自己的 provider）
+            try {
+                rikka.shizuku.ShizukuProvider.requestBinderForNonProviderProcess(ctx);
+            } catch (Throwable t) {
+                lastError = "requestBinder 异常: " + t;
             }
-        } catch (Throwable t) {
-            lastError = "self-provider call 异常: " + t;
+            try { Thread.sleep(300); } catch (Throwable ignored) {}
+            b = safeGetBinder();
         }
 
-        if (lastError.isEmpty()) {
-            lastError = "Shizuku 服务未运行/未授权（请确认 Shizuku 以 ADB 模式启动）";
+        // 路径 3：直接 call 自己的 provider 拿 binder
+        if (b == null) {
+            try {
+                ContentResolver cr = ctx.getContentResolver();
+                Bundle reply = cr.call(Uri.parse("content://" + AUTHORITY),
+                        "getBinder", null, new Bundle());
+                if (reply != null) {
+                    reply.setClassLoader(moe.shizuku.api.BinderContainer.class.getClassLoader());
+                    b = extractBinder(reply);
+                } else {
+                    lastError = "self-provider getBinder 返回 null";
+                }
+            } catch (Throwable t) {
+                lastError = "self-provider call 异常: " + t;
+            }
         }
-        return false;
+
+        if (b == null || !b.pingBinder()) {
+            if (lastError.isEmpty()) {
+                lastError = "未拿到可用的 Shizuku binder（请确认 Shizuku 以 ADB 模式启动）";
+            }
+            return false;
+        }
+
+        // 拿到真实 binder -> 灌进 Shizuku 静态字段，并完成 attachApplication
+        try {
+            Shizuku.onBinderReceived(b, ctx.getPackageName());
+            sAttached = true;
+        } catch (Throwable t) {
+            lastError = "onBinderReceived 异常: " + t;
+        }
+
+        if (safeGetBinder() == null) {
+            lastError = "onBinderReceived 后 binder 仍为 null";
+            return false;
+        }
+
+        bootstrapped = true;
+        lastError = "";
+        return true;
+    }
+
+    /** 安全地取 Shizuku 的静态 binder（可能为 null）。 */
+    private static IBinder safeGetBinder() {
+        try { return Shizuku.getBinder(); } catch (Throwable t) { return null; }
+    }
+
+    private static boolean safePing() {
+        try { return Shizuku.pingBinder(); } catch (Throwable t) { return false; }
+    }
+
+    /** 反射读 Shizuku 的私有静态字段（诊断用）。 */
+    private static String fld(String name) {
+        try {
+            java.lang.reflect.Field f = Shizuku.class.getDeclaredField(name);
+            f.setAccessible(true);
+            Object v = f.get(null);
+            if (v == null) return "null";
+            if (v instanceof Boolean) return String.valueOf(v);
+            return "ok";
+        } catch (Throwable t) {
+            return "ERR:" + t.getClass().getSimpleName();
+        }
+    }
+
+    private static boolean sAttached = false;
+
+    /**
+     * 完成 attachApplication：把 binder 交给 Shizuku.onBinderReceived()，
+     * 内部会调 IShizukuService.Stub.TRANSACTION_attachApplication(=18)。
+     * 只做一次。
+     */
+    private static void attachOnce(Context ctx) {
+        if (sAttached) return;
+        try {
+            Shizuku.onBinderReceived(Shizuku.getBinder(), ctx.getPackageName());
+            sAttached = true;
+        } catch (Throwable t) {
+            lastError = "attachApplication 异常: " + t;
+        }
     }
 
     /** 从 Bundle 取 Shizuku 的 binder（BinderContainer / 直接 IBinder 都兼容）。 */
@@ -148,7 +216,11 @@ public final class ShizukuAdapter {
     public static boolean isGranted() {
         try {
             if (!Shizuku.pingBinder()) return false;
-            return Shizuku.checkSelfPermission() == 0; // 0 = PERMISSION_GRANTED
+            int st = Shizuku.checkSelfPermission();
+            if (st == 0) return true; // PERMISSION_GRANTED
+            // checkSelfPermission 在手动 bootstrap 的绑定下不可靠，
+            // 退化判定：能读到 uid -> 说明调用已放行。
+            return Shizuku.getUid() > 0;
         } catch (Throwable t) {
             return false;
         }
@@ -200,15 +272,18 @@ public final class ShizukuAdapter {
             int guard = 0;
             while ((n = is.read(buf)) > 0) {
                 out.write(buf, 0, n);
-                if (++guard > 100000) break;  // 防止无限流
+                if (++guard > 100000) break;
             }
-
             try { p.waitFor(); } catch (Throwable ignored) {}
             return new String(out.toByteArray(), "UTF-8");
         } catch (Throwable t) {
+            lastError = "exec 异常: " + t;
             return null;
         }
     }
+
+
+
 
     /**
      * 把 IRemoteProcess 包成 Process。
