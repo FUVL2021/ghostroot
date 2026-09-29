@@ -134,7 +134,10 @@ final class ShizukuBridge {
             Object r = m("exec", String.class).invoke(null, cmd);
             return r == null ? "" : (String) r;
         } catch (Throwable t) {
-            return "";
+            // InvocationTargetException 里包着真实原因（如 binder haven't been received）
+            Throwable c = (t instanceof java.lang.reflect.InvocationTargetException
+                    && t.getCause() != null) ? t.getCause() : t;
+            return "[EXEC_THROW] " + c;
         }
     }
 
